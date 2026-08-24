@@ -1,0 +1,42 @@
+# Virtual environment
+venv/
+.venv/
+env/
+ENV/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Environment variables / secrets
+.env
+.env.local
+*.key
+
+# Vector store / embeddings (usually large, regenerable)
+4_rag_layer/evidence_store/*
+!4_rag_layer/evidence_store/.gitkeep
+
+# Feedback/logs (runtime-generated)
+9_feedback_loop/feedback_store/*
+!9_feedback_loop/feedback_store/.gitkeep
+11_telemetry/*.log
+
+# Jupyter
+.ipynb_checkpoints/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build/dist
+*.egg-info/
+dist/
+build/
