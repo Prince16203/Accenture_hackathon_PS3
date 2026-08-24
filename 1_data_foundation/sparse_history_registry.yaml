@@ -1,0 +1,115 @@
+# ============================================================
+# RootCause.ai — Sparse History Registry
+# Flags Store x Dept combinations with insufficient historical
+# depth for standard statistical methods (seasonal decomposition,
+# control limits both require a minimum run of weeks to be valid).
+# Read by 2_signal_layer/sparse_history_fallback.py to decide
+# whether to route a KPI check through the normal path or the
+# cohort/proxy fallback path.
+# ============================================================
+
+version: 1.0
+
+# --- Global rule: below this many weeks of history, standard
+#     seasonal_decompose + control_limits are considered unreliable
+#     and the fallback path must be used instead. ---
+global_thresholds:
+  min_weeks_for_seasonal_decompose: 12   # STL-style methods need enough cycles to be meaningful
+  min_weeks_for_control_limits: 8        # fewer than this, std-dev bands are not statistically sound
+  sparse_flag_threshold: 8               # anything under this weeks-of-history is auto-flagged sparse
+
+# ============================================================
+# Known sparse Store x Dept combinations (verified against the
+# real sales_data.csv — these are genuine gaps in the source
+# data, not artificially truncated for the demo).
+# ============================================================
+flagged_combinations:
+
+  - store: 3
+    dept: 83
+    n_weeks_history: 1
+    first_seen: "2011-01-10"
+    reason: "new_department_launch"
+    evidence_ref: "field_reports.csv — new_product / launch category, Store 3 Dept 83"
+    fallback_strategy: cohort_proxy
+    cohort_definition:
+      method: "peer_department_in_similar_stores"
+      match_on: ["Type"]              # match Store 3's Type (A/B/C) against other stores
+      target_dept: 83
+      description: >
+        Compare Dept 83's early performance against Dept 83's
+        performance in other stores of the same Type, during their
+        own first 1-2 weeks post-launch, instead of against Store 3's
+        own (nonexistent) history.
+
+  - store: 7
+    dept: 99
+    n_weeks_history: 1
+    first_seen: "2011-03-05"
+    reason: "single_test_batch_pilot"
+    evidence_ref: "field_reports.csv — new_product, Store 7 Dept 99, discontinued after pilot"
+    fallback_strategy: no_baseline_available
+    cohort_definition:
+      method: "none"
+      description: >
+        Dept 99 was a single-week test pilot, not intended to
+        recur. No valid cohort exists — system should report this
+        explicitly rather than force a comparison, and should not
+        flag its single week as an "anomaly" at all since there is
+        no trend to deviate from.
+
+  - store: 14
+    dept: 43
+    n_weeks_history: 1
+    first_seen: "2011-02-14"
+    reason: "seasonal_category_pilot"
+    evidence_ref: "field_reports.csv — new_product pilot, Store 14 Dept 43"
+    fallback_strategy: cohort_proxy
+    cohort_definition:
+      method: "peer_department_in_similar_stores"
+      match_on: ["Type", "Size"]
+      target_dept: 43
+      description: >
+        Compare against Dept 43 performance in similarly-sized
+        stores of the same Type, if any exist with longer history.
+
+# ============================================================
+# Fallback strategy definitions — what each strategy actually
+# means operationally, referenced by name above.
+# ============================================================
+fallback_strategies:
+
+  cohort_proxy:
+    description: >
+      Instead of comparing a sparse KPI against its own (insufficient)
+      history, compare it against a peer group — other stores/depts
+      matched on relevant dimensions (Type, Size, region) — to
+      establish what "normal" looks like for a comparable entity.
+    confidence_impact: >
+      Any conclusion drawn via cohort_proxy should be assigned a
+      lower confidence ceiling than a conclusion drawn from a KPI's
+      own sufficient history — the comparison is inherently weaker
+      evidence. Enforced in 6_confidence_layer/match_strength.py.
+
+  no_baseline_available:
+    description: >
+      No valid comparison exists — not enough of the KPI's own
+      history, and no sensible peer group (e.g. a one-off pilot
+      with no equivalent elsewhere). The correct system behavior
+      is to explicitly abstain on materiality/anomaly judgments
+      for this KPI, not to force a statistical test that isn't valid.
+    confidence_impact: >
+      Materiality gate should route straight to "insufficient data"
+      status rather than attempting seasonal_decompose or
+      control_limits at all.
+
+# ============================================================
+# Detection rule for FUTURE sparse cases not yet in the list above.
+# New Store x Dept combinations appearing in the data should be
+# auto-checked against global_thresholds and, if under threshold,
+# added here (or flagged for manual review) rather than silently
+# processed through the standard statistical path.
+# ============================================================
+auto_detection_rule:
+  trigger: "n_weeks_history < global_thresholds.sparse_flag_threshold"
+  action: "route_to_fallback_and_log_for_registry_update"

@@ -1,0 +1,89 @@
+# ============================================================
+# RootCause.ai — KPI Dependency Graph
+# Structural view of how the 5 KPIs in kpi_contract.yaml relate.
+# Used by the agent to know which KPIs to check when investigating
+# a movement in another KPI (e.g. a revenue drop -> check markdown_spend,
+# dept_revenue_share, holiday_lift_pct as candidate explanations).
+# ============================================================
+
+version: 1.0
+
+nodes:
+  - id: total_weekly_revenue
+    role: primary
+  - id: dept_revenue_share
+    role: derived
+  - id: regional_revenue
+    role: derived
+  - id: markdown_spend
+    role: driver
+  - id: holiday_lift_pct
+    role: derived
+
+edges:
+  # --- Decomposition: total_weekly_revenue breaks down into dept_revenue_share ---
+  - from: total_weekly_revenue
+    to: dept_revenue_share
+    relationship: decomposes_into
+    description: >
+      A store-level revenue movement can be broken down into which
+      department(s) contributed most to the change.
+
+  # --- Rollup: total_weekly_revenue aggregates up into regional_revenue ---
+  - from: total_weekly_revenue
+    to: regional_revenue
+    relationship: rolls_up_into
+    description: >
+      Store-level revenue aggregates into region-level revenue via
+      the store_region_mapping dimension.
+
+  # --- Driver: markdown_spend influences total_weekly_revenue ---
+  - from: markdown_spend
+    to: total_weekly_revenue
+    relationship: influences
+    description: >
+      Promotional/markdown spend is a candidate causal driver of
+      revenue movement — expected to correlate positively, and its
+      absence is a candidate explanation for an unexpected dip.
+
+  # --- Driver: markdown_spend also influences regional_revenue (indirectly) ---
+  - from: markdown_spend
+    to: regional_revenue
+    relationship: influences
+    description: >
+      Markdown effects propagate to the regional rollup through the
+      stores that received the markdown.
+
+  # --- Seasonal context: holiday_lift_pct explains total_weekly_revenue ---
+  - from: holiday_lift_pct
+    to: total_weekly_revenue
+    relationship: explains_variance_in
+    description: >
+      Holiday-driven seasonal swings must be accounted for before a
+      revenue movement is treated as a genuine anomaly — this is what
+      the signal layer's seasonal_decompose step checks first.
+
+# ============================================================
+# Investigation traversal order — the sequence the ReAct agent
+# should check when a total_weekly_revenue anomaly is confirmed
+# material by the signal layer. Not a strict rule, but the default
+# hypothesis-generation order.
+# ============================================================
+investigation_priority:
+  - step: 1
+    check: holiday_lift_pct
+    reason: "Rule out seasonality first — cheapest, deterministic check."
+  - step: 2
+    check: dept_revenue_share
+    reason: "Localize the movement to specific department(s) before going further."
+  - step: 3
+    check: markdown_spend
+    reason: "Check whether a pricing/promo driver explains the localized movement."
+  - step: 4
+    check: regional_revenue
+    reason: "Confirm whether this is isolated to one store or part of a wider regional pattern."
+  - step: 5
+    check: rag_evidence
+    reason: >
+      If numeric drivers above don't fully explain the movement,
+      escalate to unstructured evidence (field_reports) via hybrid RAG.

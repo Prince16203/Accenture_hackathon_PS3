@@ -1,0 +1,167 @@
+# ============================================================
+# RootCause.ai — KPI Semantic Contract
+# Defines every KPI's meaning, calculation, source, grain,
+# thresholds, lineage, and access rules. All downstream phases
+# (signal detection, SQL tool, RAG, agent) read from this file
+# as the single source of truth — no module redefines a metric.
+# ============================================================
+
+version: 1.0
+last_updated: "2026-08-24"
+
+kpis:
+
+  - id: total_weekly_revenue
+    name: "Total Weekly Revenue"
+    role: primary
+    description: >
+      Sum of all sales dollars for a given store (optionally filtered
+      by department) in a given week. The core KPI everything else
+      explains or rolls up from.
+    formula: "SUM(Weekly_Sales)"
+    grain: "store x department x week"
+    source:
+      dataset: pos_weekly
+      file: "sources/pos_weekly/sales_data.csv"
+      columns_used: [Store, Dept, Date, Weekly_Sales]
+      refresh_cadence: weekly
+    unit: "USD"
+    materiality:
+      statistical_method: "seasonal_decompose + control_limits"
+      min_pct_change: 0.10          # 10% move minimum before flagging
+      min_dollar_impact: 5000       # ignore moves worth less than this
+    lineage: "Raw transactional feed -> weekly aggregation by store/dept"
+    access_restrictions:
+      default: standard
+      notes: "Visible to all standard analyst/manager roles."
+
+  - id: dept_revenue_share
+    name: "Department Revenue Share"
+    role: derived
+    description: >
+      Each department's percentage contribution to its store's total
+      weekly revenue. Used to decompose a store-level movement down
+      to the department(s) actually driving it.
+    formula: "dept Weekly_Sales / SUM(Weekly_Sales) for that store+week"
+    grain: "store x department x week"
+    depends_on: [total_weekly_revenue]
+    source:
+      dataset: pos_weekly
+      file: "sources/pos_weekly/sales_data.csv"
+      columns_used: [Store, Dept, Date, Weekly_Sales]
+      refresh_cadence: weekly
+    unit: "percentage"
+    materiality:
+      statistical_method: "contribution_ranking"
+      min_pct_change: 0.15
+    lineage: "Derived from total_weekly_revenue at dept grain"
+    access_restrictions:
+      default: standard
+
+  - id: regional_revenue
+    name: "Regional Revenue Rollup"
+    role: derived
+    description: >
+      Total weekly revenue aggregated up from store level to region
+      (North/South/East/West), via the store-to-region dimension table.
+    formula: "SUM(total_weekly_revenue) grouped by region"
+    grain: "region x week"
+    depends_on: [total_weekly_revenue]
+    source:
+      dataset: pos_weekly + dimension join
+      file: "sources/pos_weekly/sales_data.csv"
+      join_table: "dimensions/store_region_mapping.csv"
+      columns_used: [Store, Date, Weekly_Sales, Region]
+      refresh_cadence: weekly
+    unit: "USD"
+    materiality:
+      statistical_method: "seasonal_decompose + control_limits"
+      min_pct_change: 0.10
+      min_dollar_impact: 25000
+    lineage: "total_weekly_revenue joined to store_region_mapping, summed by region"
+    access_restrictions:
+      default: role_based
+      notes: >
+        Regional rollups may be restricted to managers/VPs covering
+        that specific region — enforced in 10_security/entitlements.yaml.
+
+  - id: markdown_spend
+    name: "Markdown / Promotional Spend"
+    role: driver
+    description: >
+      Total markdown/promotional dollars applied at a store in a given
+      week (sum of MarkDown1-5). A candidate driver explaining revenue
+      movements — high markdown weeks are expected to lift revenue;
+      absence of expected markdown is a candidate root cause for a dip.
+    formula: "SUM(MarkDown1, MarkDown2, MarkDown3, MarkDown4, MarkDown5)"
+    grain: "store x week"
+    influences: [total_weekly_revenue, regional_revenue]
+    source:
+      dataset: ops_weekly
+      file: "sources/ops_weekly/features_data.csv"
+      columns_used: [Store, Date, MarkDown1, MarkDown2, MarkDown3, MarkDown4, MarkDown5]
+      refresh_cadence: weekly
+    unit: "USD"
+    data_quality_notes: >
+      MarkDown columns are heavily NULL for early periods (pre-Nov 2011)
+      — treat NULL as "no markdown recorded," not zero, when reasoning
+      about causality. This is real source incompleteness, not a bug.
+    materiality:
+      statistical_method: "week-over-week delta"
+      min_pct_change: 0.20
+    lineage: "Raw ops/markdown feed, store-level weekly grain"
+    access_restrictions:
+      default: standard
+
+  - id: holiday_lift_pct
+    name: "Holiday Lift Percentage"
+    role: derived
+    description: >
+      Percentage change in a store's weekly revenue during a flagged
+      holiday week versus its trailing 4-week non-holiday average.
+      Explains seasonal revenue swings so they aren't mistaken for
+      anomalies (or masks a real anomaly that seasonality is hiding).
+    formula: >
+      (Weekly_Sales[IsHoliday=True] - AVG(Weekly_Sales[prior 4 non-holiday weeks]))
+      / AVG(Weekly_Sales[prior 4 non-holiday weeks])
+    grain: "store x week (holiday weeks only)"
+    depends_on: [total_weekly_revenue]
+    source:
+      dataset: pos_weekly
+      file: "sources/pos_weekly/sales_data.csv"
+      columns_used: [Store, Date, Weekly_Sales, IsHoliday]
+      refresh_cadence: weekly
+    unit: "percentage"
+    materiality:
+      statistical_method: "trailing_average_comparison"
+      min_pct_change: 0.10
+    lineage: "total_weekly_revenue, filtered/compared across holiday vs. baseline weeks"
+    access_restrictions:
+      default: standard
+
+# ============================================================
+# Reference dimensions used across KPIs (not KPIs themselves)
+# ============================================================
+dimensions:
+  - id: stores_dim
+    file: "dimensions/stores_dim.csv"
+    columns: [Store, Type, Size]
+    description: "Static store metadata — type (A/B/C) and square footage."
+
+  - id: store_region_mapping
+    file: "dimensions/store_region_mapping.csv"
+    columns: [store, region]
+    description: "Static store-to-region assignment (North/South/East/West), authored for this project since the source dataset had no native region field."
+
+# ============================================================
+# Unstructured evidence source (not a KPI — feeds RAG layer)
+# ============================================================
+evidence_sources:
+  - id: field_reports
+    file: "sources/field_reports_adhoc/field_reports.csv"
+    grain: "irregular / event-level"
+    refresh_cadence: ad_hoc
+    description: >
+      Tickets, CRM notes, and field reports used as qualitative evidence
+      to explain KPI movements surfaced by the quantitative layers above.
+    access_field: "access_level column (standard / restricted)"
