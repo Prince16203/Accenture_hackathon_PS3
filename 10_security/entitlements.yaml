@@ -1,0 +1,68 @@
+# ============================================================
+# RootCause.ai — Role-Based Entitlements
+# Defines what each role can see: which regions, which stores,
+# and whether restricted-access evidence (HR/legal-sensitive
+# tickets) is visible. Enforced by access_enforcer.py at the
+# point SQL and RAG tools actually query data — not just hidden
+# in a UI layer.
+# ============================================================
+
+version: 1.0
+
+roles:
+
+  store_manager:
+    display_name: "Store Manager"
+    region_access: "own_store_only"      # can only query their assigned store
+    access_level_allowed: ["standard"]    # never sees restricted (HR/legal) tickets
+    description: >
+      Can investigate KPI movements only for their own store. No
+      cross-store, cross-region, or restricted-evidence visibility.
+
+  regional_manager:
+    display_name: "Regional Manager"
+    region_access: "assigned_region_only"  # can query any store WITHIN their region
+    access_level_allowed: ["standard"]
+    description: >
+      Can investigate any store within their assigned region. Cannot
+      see other regions' data, and cannot see restricted-access
+      evidence (HR/legal-sensitive tickets) even within their own region.
+
+  regional_vp:
+    display_name: "Regional VP"
+    region_access: "assigned_region_only"
+    access_level_allowed: ["standard"]
+    description: >
+      Same regional scope as regional_manager. Still cannot see
+      restricted evidence — HR/legal sensitivity is orthogonal to
+      seniority, not just regional scope.
+
+  hr_legal:
+    display_name: "HR / Legal"
+    region_access: "all"
+    access_level_allowed: ["standard", "restricted"]
+    description: >
+      Can see restricted-access evidence (employee relations, legal
+      matters) across all regions, since HR/legal cases aren't
+      confined to one region's operational scope. Cannot necessarily
+      see full financial detail (see field-level restriction on
+      legal_sensitive category below) unless also tagged finance.
+
+  executive:
+    display_name: "Executive / Admin"
+    region_access: "all"
+    access_level_allowed: ["standard", "restricted"]
+    description: >
+      Full visibility across all regions and access levels. Reserved
+      for senior leadership / system administrators.
+
+# ============================================================
+# Field-level restriction: even within "restricted" access_level,
+# some categories carry additional sensitivity (e.g. financial
+# terms in a legal dispute) that only specific roles should see
+# in full detail, regardless of general restricted-tier access.
+# ============================================================
+category_level_restrictions:
+  legal_sensitive:
+    allowed_roles: ["hr_legal", "executive"]
+    note: "Vendor/legal financial terms — restricted even beyond general HR/legal visibility in some orgs; kept simple here as hr_legal + executive only."
