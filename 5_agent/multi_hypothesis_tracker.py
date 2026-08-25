@@ -63,13 +63,6 @@ def _is_refutation(text: str) -> bool:
 
 
 def generate_hypotheses_from_evidence(evidence: list) -> list:
-    """
-    Groups retrieved evidence tickets into candidate driver-type
-    hypotheses based on their category tag. Tickets whose text
-    explicitly refutes the category's default hypothesis (e.g. an
-    'inventory' ticket confirming normal stock) are tracked as
-    CONTRADICTING evidence for that hypothesis, not supporting it.
-    """
     grouped = defaultdict(list)
     refuting = defaultdict(list)
 
@@ -85,7 +78,10 @@ def generate_hypotheses_from_evidence(evidence: list) -> list:
         else:
             grouped[driver_type].append(ticket)
 
-    all_driver_types = set(list(grouped.keys()) + list(refuting.keys()))
+    # sorted() forces deterministic order regardless of PYTHONHASHSEED —
+    # without this, ties in net_support_score resolve differently
+    # between separate process runs.
+    all_driver_types = sorted(set(list(grouped.keys()) + list(refuting.keys())))
 
     hypotheses = []
     for driver_type in all_driver_types:
@@ -101,6 +97,7 @@ def generate_hypotheses_from_evidence(evidence: list) -> list:
         hypotheses.append(hyp)
 
     return hypotheses
+
 
 
 def attach_numeric_contribution(hypotheses: list, decomposition_result: dict) -> list:
@@ -125,8 +122,10 @@ def attach_numeric_contribution(hypotheses: list, decomposition_result: dict) ->
 
 
 def rank_hypotheses(hypotheses: list) -> list:
-    """Sorts hypotheses by net_support_score, strongest first."""
-    return sorted(hypotheses, key=lambda h: h.net_support_score(), reverse=True)
+    """Sorts by net_support_score, strongest first. Secondary key (driver_type,
+    alphabetical) breaks ties deterministically instead of relying on
+    whatever order hypotheses happened to be built in."""
+    return sorted(hypotheses, key=lambda h: (-h.net_support_score(), h.driver_type))
 
 
 def hypotheses_to_dicts(hypotheses: list) -> list:

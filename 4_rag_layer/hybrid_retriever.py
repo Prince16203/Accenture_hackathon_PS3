@@ -49,18 +49,13 @@ class HybridRetriever:
 
     def search(self, query: str, top_k: int = 5, rrf_k: int = 60,
                filters: dict = None) -> list:
-        """
-        Main entry point. Runs both BM25 and dense search, fuses ranks
-        via Reciprocal Rank Fusion (score = sum of 1/(rrf_k + rank)),
-        then applies optional metadata filters (e.g. store, access_level)
-        AFTER fusion so filtering doesn't distort the ranking itself.
-
-        Returns list of dicts: ticket_id, fused_score, text, metadata.
-        """
         bm25_ranks = dict(self._bm25_search(query, top_k=20))
         dense_ranks = dict(self._dense_search(query, top_k=20))
 
-        all_ids = set(bm25_ranks) | set(dense_ranks)
+        # Sort explicitly for deterministic iteration — sets have
+        # randomized order between Python process runs, which was
+        # silently breaking ties differently on every run.
+        all_ids = sorted(set(bm25_ranks) | set(dense_ranks))
         fused_scores = {}
         for tid in all_ids:
             score = 0.0
@@ -70,7 +65,9 @@ class HybridRetriever:
                 score += 1.0 / (rrf_k + dense_ranks[tid])
             fused_scores[tid] = score
 
-        ranked_ids = sorted(fused_scores.items(), key=lambda x: x[1], reverse=True)
+        # Secondary sort key (ticket_id) breaks ties deterministically
+        # instead of relying on dict/set insertion order.
+        ranked_ids = sorted(fused_scores.items(), key=lambda x: (-x[1], x[0]))
 
         results = []
         for tid, score in ranked_ids:
