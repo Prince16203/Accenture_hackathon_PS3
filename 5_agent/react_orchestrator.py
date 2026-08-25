@@ -7,6 +7,10 @@ this is intentional. The agent's "reasoning" here is control flow:
 deciding whether to keep investigating or stop early, based on what
 each tool returns. LLM-based narrative synthesis is Phase 8's job,
 built on top of this structured output, not mixed into it.
+
+Each node is timed via @timed_step (Phase 11 telemetry) so latency
+per step is logged automatically without cluttering the orchestration
+logic itself.
 """
 
 from pathlib import Path
@@ -16,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "2_signal_layer"))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "3_tools"))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "4_rag_layer"))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "11_telemetry"))
 
 from langgraph.graph import StateGraph, END
 
@@ -31,6 +36,7 @@ from materiality_gate import evaluate_materiality
 from contribution_ranker import rank_contributions
 from hybrid_retriever import HybridRetriever
 from contradiction_detector import detect_contradictions
+from latency_logger import timed_step, InvestigationTimer
 
 _retriever_cache = None
 
@@ -46,6 +52,7 @@ def _get_retriever() -> HybridRetriever:
 # Nodes
 # ============================================================
 
+@timed_step("check_materiality")
 def node_check_materiality(state: InvestigationState) -> InvestigationState:
     result = evaluate_materiality(state["store"], state.get("dept"), target_date=state.get("target_date"))
     state["materiality_result"] = result
@@ -67,6 +74,7 @@ def route_after_materiality(state: InvestigationState) -> str:
     return "decompose"  # MATERIAL
 
 
+@timed_step("decompose")
 def node_decompose(state: InvestigationState) -> InvestigationState:
     result = rank_contributions(state["store"], state.get("target_date"))
     state["decomposition_result"] = result
@@ -75,6 +83,7 @@ def node_decompose(state: InvestigationState) -> InvestigationState:
     return state
 
 
+@timed_step("retrieve_evidence")
 def node_retrieve_evidence(state: InvestigationState) -> InvestigationState:
     retriever = _get_retriever()
     # Build a query from what we know so far — driver-type-agnostic,
@@ -86,6 +95,7 @@ def node_retrieve_evidence(state: InvestigationState) -> InvestigationState:
     return state
 
 
+@timed_step("check_contradictions")
 def node_check_contradictions(state: InvestigationState) -> InvestigationState:
     result = detect_contradictions(state.get("evidence", []))
     state["contradiction_result"] = result
@@ -100,6 +110,7 @@ def route_after_contradiction_check(state: InvestigationState) -> str:
     return "build_hypotheses"
 
 
+@timed_step("build_hypotheses")
 def node_build_hypotheses(state: InvestigationState) -> InvestigationState:
     hyps = generate_hypotheses_from_evidence(state.get("evidence", []))
     hyps = attach_numeric_contribution(hyps, state.get("decomposition_result", {}))
@@ -176,12 +187,13 @@ def build_graph():
 
 def run_investigation(store: int, dept: int = None, target_date: str = None) -> dict:
     """Main entry point — runs the full investigation graph for a given store/dept/week."""
-    app = build_graph()
-    initial_state: InvestigationState = {
-        "store": store, "dept": dept, "target_date": target_date,
-        "steps_taken": [],
-    }
-    final_state = app.invoke(initial_state)
+    with InvestigationTimer(f"store_{store}" + (f"_dept_{dept}" if dept else "")):
+        app = build_graph()
+        initial_state: InvestigationState = {
+            "store": store, "dept": dept, "target_date": target_date,
+            "steps_taken": [],
+        }
+        final_state = app.invoke(initial_state)
     return final_state
 
 
