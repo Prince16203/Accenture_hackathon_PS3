@@ -1,0 +1,40 @@
+# ============================================================
+# RootCause.ai — Persona Profiles
+# Defines how the same diagnosis + recommendation should be
+# reframed for different audiences. Same facts, different depth,
+# focus, and delivery framing — satisfies the "at least two
+# personas receiving different insight narratives or recommended
+# actions" minimum prototype requirement.
+# ============================================================
+
+version: 1.0
+
+personas:
+
+  store_manager:
+    display_name: "Store Manager"
+    depth: "operational"
+    tone: "direct, action-first"
+    focus_fields: ["action", "owner", "monitoring_plan"]
+    excludes: ["regional_pattern_context", "financial_narrative"]
+    delivery_channel: "in-app task notification / SMS summary"
+    max_length_words: 80
+    description: >
+      Needs to know what's happening at their specific store and what
+      to do about it today. Doesn't need company-wide financial framing
+      or cross-store pattern analysis — that's not actionable at their level.
+
+  regional_vp:
+    display_name: "Regional VP"
+    depth: "strategic"
+    tone: "concise, business-impact framed"
+    focus_fields: ["expected_impact", "driver", "confidence", "recurring_pattern_flag"]
+    excludes: ["step_by_step_operational_detail"]
+    delivery_channel: "weekly digest email / dashboard card"
+    max_length_words: 120
+    description: >
+      Needs the financial/strategic picture: how much revenue is at
+      stake, how confident the diagnosis is, and whether this is an
+      isolated incident or part of a broader pattern worth escalating.
+      Doesn't need operational step-by-step detail — that's the store
+      manager's job.
