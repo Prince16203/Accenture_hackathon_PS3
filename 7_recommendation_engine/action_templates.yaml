@@ -1,0 +1,98 @@
+# ============================================================
+# RootCause.ai — Action Recommendation Templates
+# Maps each driver_type (from 5_agent/multi_hypothesis_tracker.py)
+# to a structured recommendation: driver -> lever -> action ->
+# expected impact -> owner -> confidence -> monitoring plan.
+# This is deliberately template-based, not LLM-generated from
+# scratch — the LLM (when wired up) only fills in the specific
+# numbers/names into these pre-approved business actions, never
+# invents the strategy itself.
+# ============================================================
+
+version: 1.0
+
+templates:
+
+  supply_disruption:
+    driver_label: "Supply/Inventory Disruption"
+    controllable_lever: "Restock speed and carrier redundancy"
+    action_template: >
+      Expedite restock for the affected department(s) at Store {store}
+      and evaluate a backup carrier/distribution route for future
+      weather or logistics disruptions in the {region} region.
+    expected_impact_template: >
+      Based on the {pct_change_abs}% weekly revenue drop (${dollar_impact})
+      observed, restoring stock availability is expected to recover
+      most of this loss within 1-2 weeks, consistent with the
+      resolution pattern seen in the evidence trail.
+    default_owner: "Regional Inventory / Distribution Manager"
+    monitoring_plan: >
+      Track weekly revenue recovery at Store {store} for the next 3
+      weeks, plus restock delivery confirmation date and shelf-audit
+      status for the affected department(s).
+
+  promotional_visibility:
+    driver_label: "Reduced Promotional Visibility"
+    controllable_lever: "Marketing spend allocation"
+    action_template: >
+      Restore local marketing spend (flyer/radio) for Store {store},
+      or run a targeted follow-up promotion to recapture awareness
+      of markdown pricing that was under-communicated this period.
+    expected_impact_template: >
+      The {pct_change_abs}% revenue drop (${dollar_impact}) coincided
+      with a marketing budget pause at this store — reinstating
+      visibility is expected to partially recover lost sales,
+      pending confirmation this is the dominant driver versus
+      other concurrent factors.
+    default_owner: "Regional Marketing Manager"
+    monitoring_plan: >
+      Track customer awareness signals (survey mentions of promotions)
+      and week-over-week revenue at Store {store} for 2-3 weeks
+      following marketing reinstatement.
+
+  operational_capacity:
+    driver_label: "Staffing / Operational Capacity Gap"
+    controllable_lever: "Staffing levels"
+    action_template: >
+      Prioritize filling open cashier/floor positions at Store {store};
+      consider temporary reassignment from a nearby store while
+      recruitment is in progress.
+    expected_impact_template: >
+      Persistent staffing vacancies at Store {store} may be
+      contributing to the {pct_change_abs}% revenue movement
+      (${dollar_impact}) via longer checkout times and reduced
+      customer conversion.
+    default_owner: "Store Manager / Regional HR"
+    monitoring_plan: >
+      Track vacancy fill status and checkout-line wait times (if
+      measurable) at Store {store} over the next reporting period.
+
+  competitive_pressure:
+    driver_label: "New Competitive Pressure"
+    controllable_lever: "Local pricing and promotional response"
+    action_template: >
+      Evaluate a targeted, time-limited price-match or promotional
+      response in the trade area around Store {store} to offset the
+      new competitor's intro pricing.
+    expected_impact_template: >
+      A new competitor entry near Store {store} coincides with the
+      {pct_change_abs}% revenue drop (${dollar_impact}) — the actual
+      recoverable share depends on how much of the movement this
+      factor solely explains versus other concurrent drivers.
+    default_owner: "Regional Pricing / Category Manager"
+    monitoring_plan: >
+      Track Store {store} revenue and, if available, foot traffic
+      relative to the competitor's promotional calendar over the
+      following 4 weeks.
+
+# ============================================================
+# Fallback for low/abstain confidence — no action template is
+# matched; the recommendation engine should not force an action
+# recommendation when the underlying diagnosis wasn't confident.
+# ============================================================
+fallback:
+  low_confidence:
+    message: >
+      Confidence in the underlying diagnosis was not sufficient to
+      recommend a specific action. Recommend gathering additional
+      evidence before committing to a business response.
