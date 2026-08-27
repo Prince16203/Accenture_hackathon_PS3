@@ -27,6 +27,12 @@ STEP_CLASSIFICATION = {
     "narrate_personas": {"type": "deterministic_templating", "phase": "8_narrative_layer",
                           "note": "Currently template-based. LLM extension point exists but is not active — "
                                   "see persona_narrator.py docstring."},
+    "narrate_store_manager": {"type": "generative_llm", "phase": "8_narrative_layer",
+                               "note": "Phrases already-computed facts for the store manager persona. "
+                                       "Falls back to deterministic template if LLM unavailable."},
+    "narrate_regional_vp": {"type": "generative_llm", "phase": "8_narrative_layer",
+                             "note": "Phrases already-computed facts for the regional VP persona. "
+                                     "Falls back to deterministic template if LLM unavailable."},                              
 }
 
 
