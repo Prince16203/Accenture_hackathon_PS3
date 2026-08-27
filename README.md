@@ -1,6 +1,6 @@
 # KPI Intelligence-to-Action Engine
 
-**Accenture Innovation Challenge | PS 3: BusinessIntelligence.ai**
+**Accenture Innovation Challenge — Round 2 | Track 3: BusinessIntelligence.ai**
 
 A working prototype that diagnoses *why* a business KPI moved, ranks the actual drivers behind it, tells you how confident it is (and when it isn't), and turns the diagnosis into a concrete, owner-assigned action — all grounded in real retail data, with a transparent breakdown of exactly where deterministic logic ends and AI begins.
 
