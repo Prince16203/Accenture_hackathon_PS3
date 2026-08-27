@@ -40,13 +40,6 @@ def load_personas() -> dict:
 
 
 def _check_recurring_pattern(state: dict, evidence: list) -> str:
-    """
-    Lightweight recurrence check: does the evidence set for this store
-    reference a prior/recurring version of the same issue? Looks for
-    explicit language in the retrieved tickets rather than querying
-    historical incident records (which this prototype doesn't track
-    separately) — a real production system would check an incident log.
-    """
     recurrence_keywords = ["second", "again", "recurring", "consecutive", "third"]
     for ticket in evidence:
         text_lower = ticket.get("text", "").lower()
@@ -58,10 +51,6 @@ def _check_recurring_pattern(state: dict, evidence: list) -> str:
             )
     return "No indication in current evidence that this is a recurring pattern."
 
-
-# ============================================================
-# Template-based narratives (deterministic fallback / default)
-# ============================================================
 
 def _template_store_manager(state: dict, confidence_result: dict, recommendation: dict) -> str:
     store = state.get("store")
@@ -103,10 +92,6 @@ def _template_regional_vp(state: dict, confidence_result: dict, recommendation: 
     )
 
 
-# ============================================================
-# LLM-based narratives — phrases the SAME facts, doesn't decide them
-# ============================================================
-
 STORE_MANAGER_SYSTEM_PROMPT = """You write short, direct operational messages for retail store managers.
 You are given a set of ALREADY-DECIDED facts: a diagnosis, a recommended action, an owner, and a monitoring plan.
 Your only job is to phrase these facts as a clear, natural, action-first message under 80 words.
@@ -130,8 +115,7 @@ STRICT RULES:
 - Write only the summary itself, no preamble like "Here is the summary:"."""
 
 
-def _llm_store_manager(state: dict, confidence_result: dict, recommendation: dict) -> tuple[str, dict]:
-    """Returns (narrative_text, llm_call_metadata). Falls back to template on any failure."""
+def _llm_store_manager(state: dict, confidence_result: dict, recommendation: dict) -> tuple:
     store = state.get("store")
 
     if not recommendation.get("recommendation_available"):
@@ -152,8 +136,7 @@ def _llm_store_manager(state: dict, confidence_result: dict, recommendation: dic
         return _template_store_manager(state, confidence_result, recommendation), result
 
 
-def _llm_regional_vp(state: dict, confidence_result: dict, recommendation: dict, evidence: list) -> tuple[str, dict]:
-    """Returns (narrative_text, llm_call_metadata). Falls back to template on any failure."""
+def _llm_regional_vp(state: dict, confidence_result: dict, recommendation: dict, evidence: list) -> tuple:
     store = state.get("store")
     tier = confidence_result.get("confidence_tier", "N/A")
 
@@ -178,7 +161,6 @@ def _llm_regional_vp(state: dict, confidence_result: dict, recommendation: dict,
 
 
 def _log_llm_result(metadata: dict, step_name: str):
-    """Logs telemetry for an LLM call attempt — cost/tokens if it succeeded, latency either way."""
     log_latency_event(step_name, metadata.get("latency_ms", 0),
                        metadata={"success": metadata.get("success", False)})
     if metadata.get("success"):
@@ -190,22 +172,8 @@ def _log_llm_result(metadata: dict, step_name: str):
         )
 
 
-# ============================================================
-# Main entry point
-# ============================================================
-
 def generate_all_narratives(state: dict, confidence_result: dict, recommendation: dict,
                              use_llm: bool = True) -> dict:
-    """
-    Main entry point. Returns narratives for every defined persona,
-    keyed by persona id, plus metadata on whether the LLM or the
-    template fallback was actually used for each.
-
-    use_llm=True (default): attempts the LLM call, falls back to
-    template automatically on any failure — safe default for the demo.
-    use_llm=False: skips the LLM entirely, always uses templates —
-    useful for testing the deterministic path in isolation.
-    """
     evidence = state.get("evidence", [])
 
     if use_llm and is_llm_available():
@@ -252,30 +220,4 @@ if __name__ == "__main__":
     for persona in ["store_manager", "regional_vp"]:
         print(f"--- {persona.upper()} ---")
         print(narratives1[persona])
-        print()
-
-    print("\n" + "=" * 70)
-    print("PERSONAS: Store 27 @ 2011-09-02")
-    print("=" * 70)
-    state2 = run_investigation(27, target_date="2011-09-02")
-    conf2 = decide_confidence(state2)
-    rec2 = build_recommendation(state2, conf2)
-    narratives2 = generate_all_narratives(state2, conf2, rec2)
-    print(f"Sources used: {narratives2['_meta']}\n")
-    for persona in ["store_manager", "regional_vp"]:
-        print(f"--- {persona.upper()} ---")
-        print(narratives2[persona])
-        print()
-
-    print("\n" + "=" * 70)
-    print("PERSONAS: Store 17 @ 2011-04-29 (abstained)")
-    print("=" * 70)
-    state3 = run_investigation(17, target_date="2011-04-29")
-    conf3 = decide_confidence(state3)
-    rec3 = build_recommendation(state3, conf3)
-    narratives3 = generate_all_narratives(state3, conf3, rec3)
-    print(f"Sources used: {narratives3['_meta']}\n")
-    for persona in ["store_manager", "regional_vp"]:
-        print(f"--- {persona.upper()} ---")
-        print(narratives3[persona])
         print()

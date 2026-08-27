@@ -1,115 +1,223 @@
 """
-llm_client.py
-Thin wrapper around the Anthropic API for Phase 8 narrative synthesis
-ONLY. This is deliberately the single place in the entire codebase an
-LLM is called — every other phase (2-7, 9-12) remains 100% deterministic.
+persona_narrator.py
+Generates persona-specific narratives from the same underlying
+investigation + confidence + recommendation data.
 
-Design constraint: the LLM is given the ALREADY-COMPUTED facts (driver,
-action, owner, impact numbers, confidence tier) and asked only to
-phrase them naturally for a specific persona. It is explicitly
-instructed not to invent, alter, or add any fact, number, or claim not
-already present in the input. This is narrative synthesis, not
-diagnosis — the diagnosis already happened upstream in Phases 2-7.
+Two-tier approach:
+  1. If an LLM is available (ANTHROPIC_API_KEY set), uses it to phrase
+     the already-computed facts naturally — the LLM does NOT decide
+     anything, it only rephrases what Phases 2-7 already determined.
+  2. If no LLM is available, or the call fails for any reason, falls
+     back to the original deterministic template narrative. The demo
+     never breaks because of this layer.
 
-Fails gracefully: if no API key is set, or the call errors out for any
-reason (network, rate limit, bad response), callers fall back to the
-deterministic template narrative from persona_narrator.py's original
-logic. The demo never breaks because of this layer.
+This is the ONLY place in the entire codebase where a generative LLM
+call happens. Every other phase remains fully deterministic — see
+11_telemetry/llm_vs_nonllm_ledger.py for the live proof.
 """
 
-import os
-import time
+import yaml
 from pathlib import Path
-from dotenv import load_dotenv
+import sys
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-load_dotenv(PROJECT_ROOT / ".env")
+PERSONA_PATH = PROJECT_ROOT / "8_narrative_layer" / "persona_profiles.yaml"
 
-MODEL = "claude-haiku-4-5-20251001"
-MAX_TOKENS = 300
+sys.path.insert(0, str(PROJECT_ROOT / "5_agent"))
+sys.path.insert(0, str(PROJECT_ROOT / "6_confidence_layer"))
+sys.path.insert(0, str(PROJECT_ROOT / "7_recommendation_engine"))
+sys.path.insert(0, str(PROJECT_ROOT / "8_narrative_layer"))
+sys.path.insert(0, str(PROJECT_ROOT / "11_telemetry"))
 
-_client = None
-
-
-def _get_client():
-    """Lazily initializes the Anthropic client only if a key is present."""
-    global _client
-    if _client is not None:
-        return _client
-
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
-        return None
-
-    try:
-        import anthropic
-        _client = anthropic.Anthropic(api_key=api_key)
-        return _client
-    except ImportError:
-        return None
+from llm_client import generate_persona_narrative, is_llm_available
+from cost_tracker import log_llm_call
+from latency_logger import log_latency_event
 
 
-def is_llm_available() -> bool:
-    """Checks whether an LLM call is even possible right now (key present, package installed)."""
-    return _get_client() is not None
+def load_personas() -> dict:
+    with open(PERSONA_PATH, "r", encoding="utf-8") as f:
+        return yaml.safe_load(f)["personas"]
 
 
-def generate_persona_narrative(system_prompt: str, facts_prompt: str, step_name: str = "narrate_personas") -> dict:
-    """
-    Makes a single LLM call to phrase the given facts naturally.
+def _check_recurring_pattern(state: dict, evidence: list) -> str:
+    recurrence_keywords = ["second", "again", "recurring", "consecutive", "third"]
+    for ticket in evidence:
+        text_lower = ticket.get("text", "").lower()
+        if any(kw in text_lower for kw in recurrence_keywords):
+            return (
+                f"Note: evidence references a recurring or ongoing pattern "
+                f"(see ticket {ticket['ticket_id']}) — may warrant escalation "
+                f"beyond a single-week response."
+            )
+    return "No indication in current evidence that this is a recurring pattern."
 
-    Returns a dict: {"success": bool, "text": str or None, "input_tokens": int,
-    "output_tokens": int, "latency_ms": float, "error": str or None}
 
-    On any failure (no key, network error, API error), returns
-    success=False with error set — caller is responsible for falling
-    back to the template-based narrative.
-    """
-    client = _get_client()
-    if client is None:
-        return {
-            "success": False, "text": None,
-            "input_tokens": 0, "output_tokens": 0, "latency_ms": 0,
-            "error": "No LLM client available (missing ANTHROPIC_API_KEY or anthropic package).",
-        }
+def _template_store_manager(state: dict, confidence_result: dict, recommendation: dict) -> str:
+    store = state.get("store")
 
-    start = time.perf_counter()
-    try:
-        response = client.messages.create(
-            model=MODEL,
-            max_tokens=MAX_TOKENS,
-            temperature=0.3,  # low temperature — this is phrasing, not creative writing
-            system=system_prompt,
-            messages=[{"role": "user", "content": facts_prompt}],
+    if not recommendation.get("recommendation_available"):
+        return (
+            f"Store {store}: this week's movement could not be confidently attributed "
+            f"to a specific cause. {recommendation.get('reason', '')} "
+            f"No action is recommended until more evidence is available."
         )
-        latency_ms = (time.perf_counter() - start) * 1000
 
-        text = "".join(block.text for block in response.content if hasattr(block, "text")).strip()
+    return (
+        f"Store {store} — Action Needed\n"
+        f"What: {recommendation['action']}\n"
+        f"Owner: {recommendation['owner']}\n"
+        f"Track: {recommendation['monitoring_plan']}"
+    )
+
+
+def _template_regional_vp(state: dict, confidence_result: dict, recommendation: dict, evidence: list) -> str:
+    store = state.get("store")
+    tier = confidence_result.get("confidence_tier", "N/A")
+
+    if not recommendation.get("recommendation_available"):
+        return (
+            f"Store {store}: revenue movement flagged, but diagnosis confidence "
+            f"was insufficient to attribute a clear cause "
+            f"(status: {tier}). Recommend holding off on resource allocation "
+            f"until follow-up evidence resolves the ambiguity."
+        )
+
+    recurrence_note = _check_recurring_pattern(state, evidence)
+
+    return (
+        f"Store {store} — {recommendation['driver']}\n"
+        f"Impact: {recommendation['expected_impact']}\n"
+        f"Confidence: {tier}\n"
+        f"{recurrence_note}"
+    )
+
+
+STORE_MANAGER_SYSTEM_PROMPT = """You write short, direct operational messages for retail store managers.
+You are given a set of ALREADY-DECIDED facts: a diagnosis, a recommended action, an owner, and a monitoring plan.
+Your only job is to phrase these facts as a clear, natural, action-first message under 80 words.
+
+STRICT RULES:
+- Do not add any fact, number, cause, or recommendation not given to you.
+- Do not soften, hedge, or change the confidence level stated.
+- Do not invent additional context, causes, or next steps.
+- If told there is no recommendation available, say so plainly and do not suggest an action anyway.
+- Write only the message itself, no preamble like "Here is the message:"."""
+
+REGIONAL_VP_SYSTEM_PROMPT = """You write short, business-impact-framed summaries for a retail regional VP.
+You are given ALREADY-DECIDED facts: a diagnosis, its financial impact, a confidence tier, and a recurrence note.
+Your only job is to phrase these facts as a clear, concise strategic summary under 100 words.
+
+STRICT RULES:
+- Do not add any fact, number, cause, or recommendation not given to you.
+- Do not soften, hedge, or change the confidence level or dollar figures stated.
+- Do not invent additional financial context or strategic implications beyond what's given.
+- If told confidence was insufficient, say so plainly and do not offer a diagnosis anyway.
+- Write only the summary itself, no preamble like "Here is the summary:"."""
+
+
+def _llm_store_manager(state: dict, confidence_result: dict, recommendation: dict) -> tuple:
+    store = state.get("store")
+
+    if not recommendation.get("recommendation_available"):
+        facts = f"Store: {store}\nStatus: No confident diagnosis available.\nReason: {recommendation.get('reason', '')}"
+    else:
+        facts = (
+            f"Store: {store}\n"
+            f"Recommended action: {recommendation['action']}\n"
+            f"Owner: {recommendation['owner']}\n"
+            f"Monitoring plan: {recommendation['monitoring_plan']}"
+        )
+
+    result = generate_persona_narrative(STORE_MANAGER_SYSTEM_PROMPT, facts, step_name="narrate_store_manager")
+
+    if result["success"]:
+        return result["text"], result
+    else:
+        return _template_store_manager(state, confidence_result, recommendation), result
+
+
+def _llm_regional_vp(state: dict, confidence_result: dict, recommendation: dict, evidence: list) -> tuple:
+    store = state.get("store")
+    tier = confidence_result.get("confidence_tier", "N/A")
+
+    if not recommendation.get("recommendation_available"):
+        facts = f"Store: {store}\nStatus: Confidence insufficient to attribute a cause.\nConfidence tier: {tier}"
+    else:
+        recurrence_note = _check_recurring_pattern(state, evidence)
+        facts = (
+            f"Store: {store}\n"
+            f"Diagnosis: {recommendation['driver']}\n"
+            f"Financial impact: {recommendation['expected_impact']}\n"
+            f"Confidence tier: {tier}\n"
+            f"Recurrence note: {recurrence_note}"
+        )
+
+    result = generate_persona_narrative(REGIONAL_VP_SYSTEM_PROMPT, facts, step_name="narrate_regional_vp")
+
+    if result["success"]:
+        return result["text"], result
+    else:
+        return _template_regional_vp(state, confidence_result, recommendation, evidence), result
+
+
+def _log_llm_result(metadata: dict, step_name: str):
+    log_latency_event(step_name, metadata.get("latency_ms", 0),
+                       metadata={"success": metadata.get("success", False)})
+    if metadata.get("success"):
+        log_llm_call(
+            model="claude-haiku-4-5",
+            input_tokens=metadata.get("input_tokens", 0),
+            output_tokens=metadata.get("output_tokens", 0),
+            step_name=step_name,
+        )
+
+
+def generate_all_narratives(state: dict, confidence_result: dict, recommendation: dict,
+                             use_llm: bool = True) -> dict:
+    evidence = state.get("evidence", [])
+
+    if use_llm and is_llm_available():
+        sm_text, sm_meta = _llm_store_manager(state, confidence_result, recommendation)
+        _log_llm_result(sm_meta, "narrate_store_manager")
+
+        vp_text, vp_meta = _llm_regional_vp(state, confidence_result, recommendation, evidence)
+        _log_llm_result(vp_meta, "narrate_regional_vp")
 
         return {
-            "success": True, "text": text,
-            "input_tokens": response.usage.input_tokens,
-            "output_tokens": response.usage.output_tokens,
-            "latency_ms": round(latency_ms, 2),
-            "error": None,
+            "store_manager": sm_text,
+            "regional_vp": vp_text,
+            "_meta": {
+                "store_manager_source": "llm" if sm_meta["success"] else "template_fallback",
+                "regional_vp_source": "llm" if vp_meta["success"] else "template_fallback",
+            },
         }
 
-    except Exception as e:
-        latency_ms = (time.perf_counter() - start) * 1000
-        return {
-            "success": False, "text": None,
-            "input_tokens": 0, "output_tokens": 0, "latency_ms": round(latency_ms, 2),
-            "error": f"{type(e).__name__}: {e}",
-        }
+    return {
+        "store_manager": _template_store_manager(state, confidence_result, recommendation),
+        "regional_vp": _template_regional_vp(state, confidence_result, recommendation, evidence),
+        "_meta": {
+            "store_manager_source": "template",
+            "regional_vp_source": "template",
+        },
+    }
 
 
 if __name__ == "__main__":
-    print(f"LLM available: {is_llm_available()}")
-    if is_llm_available():
-        result = generate_persona_narrative(
-            system_prompt="You rephrase structured business facts into one short, natural paragraph. Never add facts not given to you.",
-            facts_prompt="Store: 18. Driver: Supply disruption. Action: Expedite restock. Confidence: HIGH.",
-        )
-        print(result)
-    else:
-        print("Set ANTHROPIC_API_KEY in .env to test the actual API call.")
+    from react_orchestrator import run_investigation
+    from abstention_policy import decide_confidence
+    from filler import build_recommendation
+
+    print(f"LLM available: {is_llm_available()}\n")
+
+    print("=" * 70)
+    print("PERSONAS: Store 18 @ 2011-09-02")
+    print("=" * 70)
+    state1 = run_investigation(18, target_date="2011-09-02")
+    conf1 = decide_confidence(state1)
+    rec1 = build_recommendation(state1, conf1)
+    narratives1 = generate_all_narratives(state1, conf1, rec1)
+    print(f"Sources used: {narratives1['_meta']}\n")
+    for persona in ["store_manager", "regional_vp"]:
+        print(f"--- {persona.upper()} ---")
+        print(narratives1[persona])
+        print()

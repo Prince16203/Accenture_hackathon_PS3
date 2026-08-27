@@ -32,7 +32,7 @@ STEP_CLASSIFICATION = {
                                        "Falls back to deterministic template if LLM unavailable."},
     "narrate_regional_vp": {"type": "generative_llm", "phase": "8_narrative_layer",
                              "note": "Phrases already-computed facts for the regional VP persona. "
-                                     "Falls back to deterministic template if LLM unavailable."},
+                                     "Falls back to deterministic template if LLM unavailable."},                              
 }
 
 
