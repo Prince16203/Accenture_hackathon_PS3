@@ -72,12 +72,24 @@ def evaluate_materiality(store: int, dept=None, kpi_id: str = "total_weekly_reve
 
     series = filtered.groupby("Date")["Weekly_Sales"].sum().sort_index()
 
+    if series.empty:
+        return {
+            "kpi_id": kpi_id, "store": store, "dept": dept,
+            "path": "no_data_found",
+            "materiality_verdict": "ABSTAIN",
+            "detail": {
+                "reason": f"No sales data found for Store {store}" + (f" / Dept {dept}" if dept else "") + "."
+            },
+        }
+
     if not has_sufficient_history(series, window=8):
         return {
             "kpi_id": kpi_id, "store": store, "dept": dept,
             "path": "insufficient_history_not_in_registry",
             "materiality_verdict": "ABSTAIN",
-            "detail": "Fewer than 8 weeks of history and not flagged in sparse registry — flag for registry update.",
+            "detail": {
+                "reason": "Fewer than 8 weeks of history and not flagged in sparse registry — flag for registry update."
+            },
         }
 
     # --- Step 3: control limits (always runs) ---
