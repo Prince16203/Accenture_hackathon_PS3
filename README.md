@@ -339,11 +339,10 @@ Add an `ANTHROPIC_API_KEY` to a `.env` file at the project root. Without one, th
 
 ## ⚠️ Known Limitations
 
-*Stated honestly, not hidden.*
 
 | Limitation | Detail |
 |---|---|
-| **Dataset-specific bindings** | The architecture generalizes, but several modules currently reference this dataset's exact column names directly rather than reading them dynamically from the KPI contract. Parameterizing this fully is the clearest next step toward a dataset-agnostic deployment. |
+| **Dataset-specific bindings** | The architecture generalizes, but few modules currently reference this dataset's exact column names directly rather than reading them dynamically from the KPI contract. Parameterizing this fully is the clearest next step toward a dataset-agnostic deployment. |
 | **No formal causal inference or forecasting yet** | The multi-hypothesis reasoning tests and eliminates candidate causes against evidence — meaningful causal *reasoning* in practice — but it is not a formal causal-inference model with counterfactuals, and there is no predictive component. |
 | **No free-text intent parsing** | The system takes structured input (store, department, week) rather than a natural-language question. An LLM-based intent-parsing layer in front of the existing pipeline is a natural, comparatively low-risk next step. |
 | **STL seasonal decomposition** | Operates near its minimum reliable data requirement given the dataset's ~2.5-year span — flagged transparently rather than overstated. |
